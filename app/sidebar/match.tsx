@@ -5,7 +5,7 @@ import * as FileSystem from "expo-file-system";
 import * as XLSX from "xlsx";
 import * as Sharing from "expo-sharing"; // Import expo-sharing
 import { collection, getDocs } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { db } from "@/utils/firebaseConfig";
 
 interface DocumentResult {
   uri: string;

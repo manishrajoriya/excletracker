@@ -4,7 +4,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import { collection, addDoc, getDocs, deleteDoc, doc } from "firebase/firestore";
 import * as XLSX from "xlsx";
-import { db } from "@/firebaseConfig";
+import { db } from "@/utils/firebaseConfig";
 
 export default function App() {
   const [uploading, setUploading] = useState(false);

@@ -3,8 +3,8 @@ import { View, Text, ScrollView, TouchableOpacity, Alert, StyleSheet } from "rea
 import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import * as FileSystem from "expo-file-system";
-import { db } from "@/firebaseConfig";
-
+import { db } from "@/utils/firebaseConfig";
+import * as Sharing from "expo-sharing";
 interface ExcelData {
   id: string;
   [key: string]: any;
@@ -32,20 +32,29 @@ const DisplayComponent: React.FC = () => {
     }
   };
 
-  const generateExcelFile = async () => {
-    try {
-      const worksheet = XLSX.utils.json_to_sheet(data);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-      const excelOutput = XLSX.write(workbook, { type: "base64", bookType: "xlsx" });
-      const fileUri = FileSystem.documentDirectory + "exported_data.xlsx";
-      await FileSystem.writeAsStringAsync(fileUri, excelOutput, { encoding: FileSystem.EncodingType.Base64 });
-      Alert.alert("Success", `Excel file generated at: ${fileUri}`);
-    } catch (error) {
-      console.error("Error generating Excel file:", error);
-      Alert.alert("Error", "Failed to generate Excel file.");
+ 
+
+const generateExcelFile = async () => {
+  try {
+    const worksheet = XLSX.utils.json_to_sheet(data);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+    const excelOutput = XLSX.write(workbook, { type: "base64", bookType: "xlsx" });
+
+    const fileUri = FileSystem.documentDirectory + "exported_data.xlsx";
+    await FileSystem.writeAsStringAsync(fileUri, excelOutput, { encoding: FileSystem.EncodingType.Base64 });
+
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(fileUri);
+    } else {
+      Alert.alert("Sharing not supported", "Your device does not support file sharing.");
     }
-  };
+  } catch (error) {
+    console.error("Error generating or sharing Excel file:", error);
+    Alert.alert("Error", "Failed to generate or share the Excel file.");
+  }
+};
+
 
   const renderItem = (item: ExcelData, index: number) => (
     <View key={item.id} style={styles.itemContainer}>

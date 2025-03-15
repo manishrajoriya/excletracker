@@ -4,7 +4,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as XLSX from "xlsx";
 import { collection, addDoc } from "firebase/firestore";
-import { db } from "@/firebaseConfig";
+import { db } from "@/utils/firebaseConfig";
 
 interface DocumentResult {
   uri: string;
