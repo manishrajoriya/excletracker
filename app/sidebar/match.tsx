@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as XLSX from "xlsx";
-import * as Sharing from "expo-sharing"; // Import expo-sharing
-import { collection, getDocs } from "firebase/firestore";
+import * as Sharing from "expo-sharing";
+import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
 import { db } from "@/utils/firebaseConfig";
 
 interface DocumentResult {
@@ -15,19 +15,75 @@ interface DocumentResult {
 }
 
 interface ExcelData {
-  id: string;
+  id: string | undefined;
   data: string;
 }
 
+// Local storage keys
+const LOCAL_STORAGE_KEYS = {
+  EXISTING_DATA: "existingData",
+  COMMON_DATA: "commonData",
+  UNMATCHED_DATA: "unmatchedData",
+};
+
 const CompareAndUploadComponent: React.FC = () => {
   const [uploading, setUploading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [existingData, setExistingData] = useState<ExcelData[]>([]);
+  const [commonData, setCommonData] = useState<ExcelData[]>([]);
+  const [unmatchedData, setUnmatchedData] = useState<any[]>([]);
 
-  // Fetch existing data from Firebase
+  // Load data from local storage on component mount
   useEffect(() => {
-    fetchExistingData();
+    const loadFromLocalStorage = async () => {
+      try {
+        const existing = await FileSystem.readAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.EXISTING_DATA
+        );
+        const common = await FileSystem.readAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.COMMON_DATA
+        );
+        const unmatched = await FileSystem.readAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.UNMATCHED_DATA
+        );
+
+        setExistingData(JSON.parse(existing) || []);
+        setCommonData(JSON.parse(common) || []);
+        setUnmatchedData(JSON.parse(unmatched) || []);
+      } catch (error) {
+        console.error("Error loading data from local storage:", error);
+      }
+    };
+
+    loadFromLocalStorage();
   }, []);
 
+  // Save data to local storage whenever it changes
+  useEffect(() => {
+    const saveToLocalStorage = async () => {
+      try {
+        await FileSystem.writeAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.EXISTING_DATA,
+          JSON.stringify(existingData)
+        );
+        await FileSystem.writeAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.COMMON_DATA,
+          JSON.stringify(commonData)
+        );
+        await FileSystem.writeAsStringAsync(
+          FileSystem.documentDirectory + LOCAL_STORAGE_KEYS.UNMATCHED_DATA,
+          JSON.stringify(unmatchedData)
+        );
+      } catch (error) {
+        console.error("Error saving data to local storage:", error);
+      }
+    };
+
+    saveToLocalStorage();
+  }, [existingData, commonData, unmatchedData]);
+
+  // Fetch existing data from Firebase
   const fetchExistingData = async () => {
     try {
       const querySnapshot = await getDocs(collection(db, "excelData"));
@@ -36,6 +92,22 @@ const CompareAndUploadComponent: React.FC = () => {
     } catch (error) {
       console.error("Error fetching existing data:", error);
       Alert.alert("Error", "Failed to fetch existing data.");
+    }
+  };
+
+  // Refresh functionality
+  const refreshData = async () => {
+    setRefreshing(true);
+    try {
+      await fetchExistingData(); // Fetch latest data from Firebase
+      setCommonData([]); // Clear common data
+      setUnmatchedData([]); // Clear unmatched data
+      Alert.alert("Success", "Data refreshed successfully.");
+    } catch (error) {
+      console.error("Error refreshing data:", error);
+      Alert.alert("Error", "Failed to refresh data.");
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -73,23 +145,15 @@ const CompareAndUploadComponent: React.FC = () => {
       const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
       // Compare new data with existing data
-      const commonData = findCommonData(jsonData, existingData);
+      const { common, unmatched } = findCommonAndUnmatchedData(jsonData, existingData);
 
-      if (commonData.length > 0) {
-        // Generate a new Excel file with common data
-        const fileUri = await generateNewExcel(commonData);
+      setCommonData(common);
+      setUnmatchedData(unmatched);
 
-        // Share the generated Excel file
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(fileUri, {
-            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            dialogTitle: "Share Excel File",
-          });
-        } else {
-          Alert.alert("Sharing not available", "Sharing is not available on this device.");
-        }
+      if (common.length > 0 || unmatched.length > 0) {
+        Alert.alert("Info", "Data processed. You can now share the file.");
       } else {
-        Alert.alert("Info", "No common data found.");
+        Alert.alert("Info", "No data found to process.");
       }
     } catch (error) {
       console.error("Error processing Excel file:", error);
@@ -99,47 +163,167 @@ const CompareAndUploadComponent: React.FC = () => {
     }
   };
 
-  // Find common data between new and existing data
-  const findCommonData = (newData: any[], existingData: ExcelData[]) => {
-    const existingDataValues = existingData.map((item) => item.data); // Extract values from Firebase data
-    return newData.filter((row) => {
+  // Find common and unmatched data
+  const findCommonAndUnmatchedData = (newData: any[], existingData: ExcelData[]) => {
+    const common = [];
+    const unmatched = [];
+    const usedIds = new Set(); // Track IDs of Firebase items that have been matched
+
+    for (const row of newData) {
       if (Array.isArray(row) && row.length > 0) {
-        return existingDataValues.includes(row[0]); // Compare with new Excel data
+        const matchedItems = existingData.filter((item) => item.data === row[0] && !usedIds.has(item.id));
+
+        if (matchedItems.length > 0) {
+          // Match only the first item and mark it as used
+          common.push(matchedItems[0]);
+          usedIds.add(matchedItems[0].id);
+        } else {
+          // If no match, add to unmatched data
+          unmatched.push(row);
+        }
       }
-      return false;
-    });
+    }
+
+    return { common, unmatched };
   };
 
-  // Generate a new Excel file with the common data
-  const generateNewExcel = async (commonData: any[]) => {
+  // Generate and share Excel file without saving to local storage
+  const generateAndShareExcel = async () => {
     try {
-      const worksheet = XLSX.utils.json_to_sheet(commonData);
+      // Create a combined dataset with two columns
+      const combinedData = [];
+      const maxLength = Math.max(commonData.length, unmatchedData.length);
+
+      for (let i = 0; i < maxLength; i++) {
+        combinedData.push({
+          CommonData: commonData[i] ? commonData[i].data : "", // First column: Common Data
+          UnmatchedData: unmatchedData[i] ? unmatchedData[i][0] : "", // Second column: Unmatched Data
+        });
+      }
+
+      // Create a worksheet from the combined data
+      const worksheet = XLSX.utils.json_to_sheet(combinedData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
 
-      // Write the workbook to a file
+      // Convert workbook to base64
       const excelOutput = XLSX.write(workbook, { type: "base64", bookType: "xlsx" });
-      const fileUri = FileSystem.documentDirectory + "common_data.xlsx";
+
+      // Create a temporary file URI
+      const fileUri = FileSystem.cacheDirectory + "combined_data.xlsx";
       await FileSystem.writeAsStringAsync(fileUri, excelOutput, {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      Alert.alert("Success", `New Excel file generated at: ${fileUri}`);
-      return fileUri; // Return the file URI for sharing
+      // Share the file using expo-sharing
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          dialogTitle: "Share Excel File",
+        });
+      } else {
+        Alert.alert("Sharing not available", "Sharing is not available on this device.");
+      }
     } catch (error) {
-      console.error("Error generating Excel file:", error);
-      Alert.alert("Error", "Failed to generate new Excel file.");
-      throw error;
+      console.error("Error generating or sharing Excel file:", error);
+      Alert.alert("Error", "Failed to generate or share Excel file.");
     }
   };
+
+  // Delete common data from Firebase
+  const deleteCommonData = async () => {
+    setDeleting(true);
+    try {
+      // Confirm deletion with the user
+      Alert.alert(
+        "Confirm Deletion",
+        "Are you sure you want to delete the common data from the database?",
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+          {
+            text: "Delete",
+            onPress: async () => {
+              // Delete each common data item from Firebase
+              for (const item of commonData) {
+                if (item.id) {
+                  const docRef = doc(db, "excelData", item.id); // Create a reference to the document
+                  await deleteDoc(docRef); // Delete the document
+                } else {
+                  console.warn("Skipping item with missing ID:", item);
+                }
+              }
+
+              // Refresh the data after deletion
+              await fetchExistingData();
+              setCommonData([]); // Clear common data state
+              Alert.alert("Success", "Common data deleted successfully.");
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("Error deleting common data:", error);
+      Alert.alert("Error", "Failed to delete common data.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Fetch existing data on component mount
+  useEffect(() => {
+    fetchExistingData();
+  }, []);
+
+  // Memoized buttons to reduce re-renders
+  const memoizedButtons = useMemo(() => {
+    return (
+      <>
+        {/* Refresh Button */}
+        <TouchableOpacity onPress={refreshData} style={[styles.button, { backgroundColor: "purple" }]}>
+          <Text style={styles.buttonText}>{refreshing ? "Refreshing..." : "Refresh Data"}</Text>
+        </TouchableOpacity>
+
+        {/* Upload Button */}
+        <TouchableOpacity onPress={pickDocument} style={styles.button}>
+          <Text style={styles.buttonText}>{uploading ? "Uploading..." : "Upload Excel"}</Text>
+        </TouchableOpacity>
+
+        {/* Share Combined Data Button */}
+        {(commonData.length > 0 || unmatchedData.length > 0) && (
+          <TouchableOpacity
+            onPress={generateAndShareExcel}
+            style={[styles.button, { backgroundColor: "green" }]}
+          >
+            <Text style={styles.buttonText}>Share Combined Data</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Delete Common Data Button */}
+        {commonData.length > 0 && (
+          <TouchableOpacity
+            onPress={deleteCommonData}
+            style={[styles.button, { backgroundColor: "red" }]}
+          >
+            <Text style={styles.buttonText}>{deleting ? "Deleting..." : "Delete Common Data"}</Text>
+          </TouchableOpacity>
+        )}
+      </>
+    );
+  }, [refreshing, uploading, deleting, commonData, unmatchedData]);
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Upload and Compare Excel File</Text>
-      <TouchableOpacity onPress={pickDocument} style={styles.button}>
-        <Text style={styles.buttonText}>{uploading ? "Uploading..." : "Upload Excel"}</Text>
-      </TouchableOpacity>
+
+      {memoizedButtons}
+
+      {/* Loading Indicators */}
       {uploading && <ActivityIndicator size="large" color="blue" style={{ marginTop: 10 }} />}
+      {refreshing && <ActivityIndicator size="large" color="purple" style={{ marginTop: 10 }} />}
+      {deleting && <ActivityIndicator size="large" color="red" style={{ marginTop: 10 }} />}
     </View>
   );
 };
