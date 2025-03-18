@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+} from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as XLSX from "xlsx";
 import * as Sharing from "expo-sharing";
-import { collection, getDocs, deleteDoc, doc } from "firebase/firestore";
-import { db } from "@/utils/firebaseConfig";
 
 interface DocumentResult {
   uri: string;
@@ -15,7 +20,7 @@ interface DocumentResult {
 }
 
 interface ExcelData {
-  id: string | undefined;
+  id: string;
   data: string;
 }
 
@@ -83,23 +88,10 @@ const CompareAndUploadComponent: React.FC = () => {
     saveToLocalStorage();
   }, [existingData, commonData, unmatchedData]);
 
-  // Fetch existing data from Firebase
-  const fetchExistingData = async () => {
-    try {
-      const querySnapshot = await getDocs(collection(db, "excelData"));
-      const items = querySnapshot.docs.map((doc) => ({ id: doc.id, data: doc.data().data }));
-      setExistingData(items);
-    } catch (error) {
-      console.error("Error fetching existing data:", error);
-      Alert.alert("Error", "Failed to fetch existing data.");
-    }
-  };
-
   // Refresh functionality
   const refreshData = async () => {
     setRefreshing(true);
     try {
-      await fetchExistingData(); // Fetch latest data from Firebase
       setCommonData([]); // Clear common data
       setUnmatchedData([]); // Clear unmatched data
       Alert.alert("Success", "Data refreshed successfully.");
@@ -167,18 +159,14 @@ const CompareAndUploadComponent: React.FC = () => {
   const findCommonAndUnmatchedData = (newData: any[], existingData: ExcelData[]) => {
     const common = [];
     const unmatched = [];
-    const usedIds = new Set(); // Track IDs of Firebase items that have been matched
 
     for (const row of newData) {
       if (Array.isArray(row) && row.length > 0) {
-        const matchedItems = existingData.filter((item) => item.data === row[0] && !usedIds.has(item.id));
+        const matchedItems = existingData.filter((item) => item.data === row[0]);
 
         if (matchedItems.length > 0) {
-          // Match only the first item and mark it as used
           common.push(matchedItems[0]);
-          usedIds.add(matchedItems[0].id);
         } else {
-          // If no match, add to unmatched data
           unmatched.push(row);
         }
       }
@@ -187,7 +175,7 @@ const CompareAndUploadComponent: React.FC = () => {
     return { common, unmatched };
   };
 
-  // Generate and share Excel file without saving to local storage
+  // Generate and share Excel file
   const generateAndShareExcel = async () => {
     try {
       // Create a combined dataset with two columns
@@ -230,14 +218,14 @@ const CompareAndUploadComponent: React.FC = () => {
     }
   };
 
-  // Delete common data from Firebase
+  // Delete common data
   const deleteCommonData = async () => {
     setDeleting(true);
     try {
       // Confirm deletion with the user
       Alert.alert(
         "Confirm Deletion",
-        "Are you sure you want to delete the common data from the database?",
+        "Are you sure you want to delete the common data?",
         [
           {
             text: "Cancel",
@@ -246,19 +234,12 @@ const CompareAndUploadComponent: React.FC = () => {
           {
             text: "Delete",
             onPress: async () => {
-              // Delete each common data item from Firebase
-              for (const item of commonData) {
-                if (item.id) {
-                  const docRef = doc(db, "excelData", item.id); // Create a reference to the document
-                  await deleteDoc(docRef); // Delete the document
-                } else {
-                  console.warn("Skipping item with missing ID:", item);
-                }
-              }
-
-              // Refresh the data after deletion
-              await fetchExistingData();
-              setCommonData([]); // Clear common data state
+              // Remove common data from existing data
+              const updatedExistingData = existingData.filter(
+                (item) => !commonData.some((commonItem) => commonItem.id === item.id)
+              );
+              setExistingData(updatedExistingData);
+              setCommonData([]); // Clear common data
               Alert.alert("Success", "Common data deleted successfully.");
             },
           },
@@ -271,11 +252,6 @@ const CompareAndUploadComponent: React.FC = () => {
       setDeleting(false);
     }
   };
-
-  // Fetch existing data on component mount
-  useEffect(() => {
-    fetchExistingData();
-  }, []);
 
   // Memoized buttons to reduce re-renders
   const memoizedButtons = useMemo(() => {

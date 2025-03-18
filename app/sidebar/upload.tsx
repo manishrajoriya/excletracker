@@ -3,8 +3,6 @@ import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet } fr
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as XLSX from "xlsx";
-import { collection, addDoc } from "firebase/firestore";
-import { db } from "@/utils/firebaseConfig";
 
 interface DocumentResult {
   uri: string;
@@ -16,6 +14,10 @@ interface DocumentResult {
 const UploadComponent: React.FC = () => {
   const [uploading, setUploading] = useState(false);
 
+  // Local storage key for saving Excel data
+  const LOCAL_STORAGE_KEY = "excelData";
+
+  // Pick and process the new Excel file
   const pickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -33,6 +35,7 @@ const UploadComponent: React.FC = () => {
     }
   };
 
+  // Convert the new Excel file to JSON and save to local storage
   const extractAndSaveExcel = async (file: DocumentResult) => {
     setUploading(true);
     try {
@@ -47,17 +50,21 @@ const UploadComponent: React.FC = () => {
       const sheet = workbook.Sheets[sheetName];
       const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-      // Save each row to Firebase
-      for (let row of jsonData) {
-        if (Array.isArray(row) && row.length > 0) {
-          await addDoc(collection(db, "excelData"), { data: row[0] });
-        }
-      }
+      // Save each row to local storage
+      const savedData = jsonData
+        .filter((row) => Array.isArray(row) && row.length > 0) // Filter valid rows
+        .map((row: any) => row[0]); // Extract the first column value
 
-      Alert.alert("Success", "Excel data saved to Firestore.");
+      // Save to local storage
+      await FileSystem.writeAsStringAsync(
+        FileSystem.documentDirectory + LOCAL_STORAGE_KEY,
+        JSON.stringify(savedData)
+      );
+
+      Alert.alert("Success", "Excel data saved to local storage.");
     } catch (error) {
       console.error("Error processing Excel file:", error);
-      Alert.alert("Error", "Failed to process and upload Excel file.");
+      Alert.alert("Error", "Failed to process and save Excel file.");
     } finally {
       setUploading(false);
     }

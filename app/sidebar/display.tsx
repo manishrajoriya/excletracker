@@ -9,10 +9,8 @@ import {
   TextInput,
   ActivityIndicator,
 } from "react-native";
-import { collection, getDocs } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import * as FileSystem from "expo-file-system";
-import { db } from "@/utils/firebaseConfig";
 import * as Sharing from "expo-sharing";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -30,37 +28,35 @@ const DisplayComponent: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const LOCAL_STORAGE_KEY = "excelData";
 
+  // Load data from local storage on component mount
   useEffect(() => {
     loadDataFromLocalStorage();
   }, []);
 
   // Load data from local storage
   const loadDataFromLocalStorage = async () => {
+    setLoading(true);
     try {
       const cachedData = await AsyncStorage.getItem(LOCAL_STORAGE_KEY);
       if (cachedData) {
         setData(JSON.parse(cachedData));
       }
-      fetchData(); // Fetch fresh data in the background
     } catch (error) {
       console.error("Error loading data from local storage:", error);
-      fetchData(); // Fallback to Firestore
+      Alert.alert("Error", "Failed to load data from local storage.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Fetch data from Firestore
-  const fetchData = async () => {
-    setLoading(true);
+  // Save data to local storage
+  const saveDataToLocalStorage = async (newData: ExcelData[]) => {
     try {
-      const querySnapshot = await getDocs(collection(db, "excelData"));
-      const items = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      setData(items);
-      await AsyncStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
+      await AsyncStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newData));
+      setData(newData);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      Alert.alert("Error", "Failed to fetch data.");
-    } finally {
-      setLoading(false);
+      console.error("Error saving data to local storage:", error);
+      Alert.alert("Error", "Failed to save data to local storage.");
     }
   };
 
@@ -122,7 +118,7 @@ const DisplayComponent: React.FC = () => {
         <TouchableOpacity onPress={generateExcelFile} style={styles.button}>
           <Text style={styles.buttonText}>Download Excel</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={fetchData} style={styles.button}>
+        <TouchableOpacity onPress={loadDataFromLocalStorage} style={styles.button}>
           <Text style={styles.buttonText}>Refresh</Text>
         </TouchableOpacity>
       </View>
